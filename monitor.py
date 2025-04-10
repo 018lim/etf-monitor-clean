@@ -37,7 +37,7 @@ def get_kst_now():
 # ✅ 감시 대상
 TICKERS = {
     "SOXL": "SOXL",
-    "DGRO": "DGRO.MX"
+    "DGRO": "DGRO"
 }
 
 INTERVAL_SECONDS = 60  # 1분 간격으로 감시
