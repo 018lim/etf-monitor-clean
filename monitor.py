@@ -30,32 +30,35 @@ import time
 import sys
 from datetime import datetime, timedelta
 
-# ✅ 한국 시간 (KST) 반환 함수
+# ✅ 한국 시간 반환 함수
 def get_kst_now():
     return datetime.utcnow() + timedelta(hours=9)
 
-# 종목코드 : yfinance 티커 매핑
+# ✅ 감시 대상
 TICKERS = {
     "SOXL": "SOXL",
     "DGRO": "DGRO.MX"
 }
 
-INTERVAL_SECONDS = 60
+INTERVAL_SECONDS = 60  # 1분 간격으로 감시
 BOT_TOKEN = '7662548035:AAGngJn_nuMwMddV5R2PT6VOrSeu0KgSvM4'
 CHAT_ID = '7885426965'
 
+# ✅ 텔레그램 알림 함수
 def send_telegram_alert(message):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": message}
     response = requests.post(url, data=payload)
     print(f"[텔레그램 응답] {response.status_code} / {response.text}")
 
-def get_return_std(ticker, months=60):
-    df = yf.download(ticker, period=f"{months}mo", interval="1d")
+# ✅ 일일 등락률의 표준편차 계산 (최대 5년치)
+def get_return_std(ticker):
+    df = yf.download(ticker, period="1250d", interval="1d")
     df['Return'] = df['Close'].pct_change()
     df = df.dropna()
     return float(df['Return'].std())
 
+# ✅ 전일 종가 / 현재가 가져오기
 def get_prev_close_and_current_price(ticker):
     daily = yf.download(ticker, period="2d", interval="1d")
     if len(daily) < 2:
@@ -69,9 +72,10 @@ def get_prev_close_and_current_price(ticker):
 
     return prev_close, current_price
 
+# ✅ 감시 루프
 def run_monitor():
     now = get_kst_now()
-    if now.weekday() >= 5:  # 5: 토요일, 6: 일요일
+    if now.weekday() >= 5:  # 토요일(5), 일요일(6)
         print("🛑 주말입니다. 감시 종료")
         send_telegram_alert("🛑 주말이라 감시 종료합니다.")
         sys.exit()
@@ -80,19 +84,18 @@ def run_monitor():
     notified = {code: False for code in TICKERS}
 
     for code, yf_ticker in TICKERS.items():
-        months = 30 if code == "441640" else 60
-        std = get_return_std(yf_ticker, months)
+        std = get_return_std(yf_ticker)
         threshold = 2 * std
         thresholds[code] = threshold
         print(f"[{code}] 기준 등락폭 (2σ): {threshold:.2%}")
 
     while True:
         now = get_kst_now()
-        #if now.hour > 6 or (now.hour == 6 and now.minute >= 30):
+        #if now.hour > 6 or (now.hour == 15 and now.minute >= 30):
         # ✅ 오후 3시 30분 이후 종료
         if now.hour > 6 :
-            print("⏹️ 감시 종료: 오후 3시 30분 도달 (KST)")
-            send_telegram_alert("⏹️ 감시 종료: 오후 3시 30분이 되었습니다 (KST).")
+            #print("⏹️ 감시 종료: 오전 3시 30분 도달 (KST)")
+            send_telegram_alert("⏹️ 감시 종료: 06시 (KST).")
             sys.exit()
 
         for code, yf_ticker in TICKERS.items():
@@ -113,4 +116,30 @@ def run_monitor():
 
                 if change_pct > threshold:
                     msg = (
-                        f"🚨 {code} 급등/급
+                        f"🚨 {code} 급등/급락 경고\n"
+                        f"변화율: {change_pct:.2%} > 기준(2σ): {threshold:.2%}\n"
+                        f"(현재가: {current_price:.2f}, 전일종가: {prev_close:.2f})"
+                    )
+                    send_telegram_alert(msg)
+                    notified[code] = True
+
+                    if all(notified.values()):
+                        print("✅ 모든 종목 감시 완료. 프로그램 종료.")
+                        send_telegram_alert("✅ 모든 감시 종목 알림 완료. 프로그램 종료.")
+                        sys.exit()
+
+                else:
+                    print(f"[{code}] 변화율 정상 범위")
+
+            except Exception as e:
+                print(f"[{code}] 오류: {e}")
+                send_telegram_alert(f"❌ {code} 오류: {e}")
+
+        time.sleep(INTERVAL_SECONDS)
+
+# ✅ 노트북 환경에서도 에러 없이 종료
+try:
+    run_monitor()
+except SystemExit:
+    pass
+
