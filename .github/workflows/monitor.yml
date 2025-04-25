@@ -2,7 +2,7 @@ name: ETF Monitor
   
 on:
   schedule:
-    - cron: '30 13 * * 1-5'  # 한국 오후 10:30
+    - cron: '0 0 * * 1-5'  # 한국 오후 10:30
   workflow_dispatch:
 
 jobs:
