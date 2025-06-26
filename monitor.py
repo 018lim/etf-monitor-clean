@@ -8,7 +8,7 @@ import time
 import sys
 from datetime import datetime, timedelta
 
-# ✅ 텔레그램 알림 함수 (보안 적용)
+# ✅ 텔레그램 알림 함수
 def send_telegram_alert(message):
     BOT_TOKEN = os.getenv("BOT_TOKEN")
     CHAT_ID = os.getenv("CHAT_ID")
@@ -17,7 +17,7 @@ def send_telegram_alert(message):
     response = requests.post(url, data=payload)
     print(f"[텔레그램 응답] {response.status_code} / {response.text}")
 
-# ✅ 한국 시간 반환 함수
+# ✅ 한국 시간 반환
 def get_kst_now():
     return datetime.utcnow() + timedelta(hours=9)
 
@@ -31,16 +31,16 @@ TICKERS = {
     "소프트웨어": "481180.KS"
 }
 
-INTERVAL_SECONDS = 60  # 1분 간격 감시
+INTERVAL_SECONDS = 120  # 1분 간격
 
-# ✅ 일일 등락률의 표준편차 계산
-def get_return_std(ticker):
+# ✅ 평균, 표준편차 계산
+def get_return_stats(ticker):
     df = yf.download(ticker, period="1250d", interval="1d")
     df['Return'] = df['Close'].pct_change()
     df = df.dropna()
-    return float(df['Return'].std())
+    return float(df['Return'].mean()), float(df['Return'].std())
 
-# ✅ 전일 종가 / 현재가 가져오기
+# ✅ 전일 종가 / 현재가
 def get_prev_close_and_current_price(ticker):
     daily = yf.download(ticker, period="2d", interval="1d")
     if len(daily) < 2:
@@ -62,21 +62,42 @@ def run_monitor():
         send_telegram_alert("🛑 주말이라 감시 종료합니다.")
         sys.exit()
 
-    # ✅ 시장시간이 아니면 종료
+    # 시장 시간 확인 (09:00~15:30)
     if now.hour < 9 or (now.hour >= 15 and now.minute > 30) or now.hour >= 16:
         print("⏹️ 주식 시장 시간이 아닙니다. 감시 종료")
         send_telegram_alert("⏹️ 주식 시장 시간이 아닙니다. 감시 종료")
         sys.exit()
 
     send_telegram_alert("🚨 주식 시장 감시 시작합니다!")
-    thresholds = {}
-    notified = {code: False for code in TICKERS}
 
+    stats = {}
+    notified = {code: False for code in TICKERS}
+    summary_msg = "📋 감시 시작 요약\n"
+
+    # 각 종목 기준 계산 및 요약 정리
     for code, yf_ticker in TICKERS.items():
-        std = get_return_std(yf_ticker)
-        threshold = 2 * std
-        thresholds[code] = threshold
-        print(f"[{code}] 기준 등락폭 (2σ): {threshold:.2%}")
+        mean, std = get_return_stats(yf_ticker)
+        stats[code] = (mean, std)
+
+        daily = yf.download(yf_ticker, period="2d", interval="1d")
+        if len(daily) < 2:
+            summary_msg += f"{code}: ❌ 전일 종가 불러오기 실패\n"
+            continue
+
+        prev_close = daily['Close'].iloc[-2].item()
+        buy_price = prev_close * (1 + mean - 2 * std)
+        sell_price = prev_close * (1 + mean + 2 * std)
+
+        summary_msg += (
+            f"📌 {code}\n"
+            f" - 전일 종가: {int(prev_close)}\n"
+            f" - 매수 기준가: {int(buy_price)}\n"
+            f" - 매도 기준가: {int(sell_price)}\n"
+            f" - 매수 기준 등락률: {(mean - 2 * std)*100:.2f}%, "
+            f"매도 기준: {(mean + 2 * std)*100:.2f}%\n\n"
+        )
+
+    send_telegram_alert(summary_msg)
 
     while True:
         now = get_kst_now()
@@ -95,29 +116,28 @@ def run_monitor():
                     print(f"[{code}] 가격 수신 실패")
                     continue
 
-                change_pct = abs((current_price - prev_close) / prev_close)
                 diff = (current_price - prev_close) / prev_close
-                threshold = thresholds[code]
+                mean, std = stats[code]
 
-                print(f"[{code}] 현재 등락률 변화: {change_pct:.2%} / 기준: {threshold:.2%}")
+                print(f"[{code}] 변화율: {diff:.2%} / 기준: ({mean:.2%} ± 2×{std:.2%})")
 
-                if diff < -threshold:
+                if diff < mean - 2 * std:
                     msg = (
-                        f"🚨 {code} 타이밍 \n"
+                        f"🚨 {code} 매수 타이밍\n"
                         f"전일종가: {int(prev_close)}\n"
-                        f"매수 기준가: {int(prev_close * (1 - threshold))}\n"
-                        f"매수 기준 등락율: -{threshold:.2%}\n"
+                        f"매수 기준가: {int(prev_close * (1 + mean - 2 * std))}\n"
+                        f"매수 기준 등락율: {(mean - 2 * std)*100:.2f}%\n"
                         f"현재가: {int(current_price)} (변화율: {diff:.2%})"
                     )
                     send_telegram_alert(msg)
                     notified[code] = True
 
-                elif diff > threshold:
+                elif diff > mean + 2 * std:
                     msg = (
-                        f"🚨 {code} 타이밍 \n"
+                        f"🚨 {code} 매도 타이밍\n"
                         f"전일종가: {int(prev_close)}\n"
-                        f"매도 기준가: {int(prev_close * (1 + threshold))}\n"
-                        f"매도 기준 등락율: +{threshold:.2%}\n"
+                        f"매도 기준가: {int(prev_close * (1 + mean + 2 * std))}\n"
+                        f"매도 기준 등락율: {(mean + 2 * std)*100:.2f}%\n"
                         f"현재가: {int(current_price)} (변화율: {diff:.2%})"
                     )
                     send_telegram_alert(msg)
@@ -137,7 +157,7 @@ def run_monitor():
 
         time.sleep(INTERVAL_SECONDS)
 
-# ✅ 노트북 환경에서도 에러 없이 종료
+# ✅ 실행
 try:
     run_monitor()
 except SystemExit:
