@@ -17,9 +17,6 @@ def send_telegram_alert(message):
     response = requests.post(url, data=payload)
     print(f"[텔레그램 응답] {response.status_code} / {response.text}")
 
-# ✅ 시작 알림
-send_telegram_alert("🚨 체크를 시작합니다!")
-
 # ✅ 한국 시간 반환 함수
 def get_kst_now():
     return datetime.utcnow() + timedelta(hours=9)
@@ -65,6 +62,13 @@ def run_monitor():
         send_telegram_alert("🛑 주말이라 감시 종료합니다.")
         sys.exit()
 
+    # ✅ 시장시간이 아니면 종료
+    if now.hour < 9 or (now.hour >= 15 and now.minute > 30) or now.hour >= 16:
+        print("⏹️ 주식 시장 시간이 아닙니다. 감시 종료")
+        send_telegram_alert("⏹️ 주식 시장 시간이 아닙니다. 감시 종료")
+        sys.exit()
+
+    send_telegram_alert("🚨 주식 시장 감시 시작합니다!")
     thresholds = {}
     notified = {code: False for code in TICKERS}
 
@@ -76,8 +80,8 @@ def run_monitor():
 
     while True:
         now = get_kst_now()
-        if now.hour > 16 or (now.hour == 15 and now.minute >= 30):
-            send_telegram_alert("⏹️ 감시 종료: 16시 (KST).")
+        if now.hour > 15 or (now.hour == 15 and now.minute >= 30):
+            send_telegram_alert("⏹️ 감시 종료: 장 마감 (KST)")
             sys.exit()
 
         for code, yf_ticker in TICKERS.items():
@@ -97,35 +101,35 @@ def run_monitor():
 
                 print(f"[{code}] 현재 등락률 변화: {change_pct:.2%} / 기준: {threshold:.2%}")
 
-                if change_pct > threshold:
-                    if prev_close > current_price:
-                        msg = (
-                            f"🚨 {code} 타이밍 \n"
-                            f"전일종가:  {prev_close:.0f}\n"
-                            f"매수 기준 가격: {int(prev_close * (1 - threshold))}\n"
-                            f"\n"
-                            f"변화율: {diff:.2%} < (기준: -{threshold:.2%})\n"
-                            f"현재가: {current_price:.0f}(전일 대비 폭: {int(current_price - prev_close)})"
-                        )
-                    else:
-                        msg = (
-                            f"🚨 {code} 타이밍 \n"
-                            f"전일종가:  {prev_close:.0f}\n"
-                            f"매도 기준 가격: {int(prev_close * (1 + threshold))}\n"
-                            f"\n"
-                            f"변화율: {diff:.2%} > (기준: {threshold:.2%})\n"
-                            f"현재가: {current_price:.0f}(전일 대비 폭: {int(current_price - prev_close)})"
-                        )
+                if diff < -threshold:
+                    msg = (
+                        f"🚨 {code} 타이밍 \n"
+                        f"전일종가: {int(prev_close)}\n"
+                        f"매수 기준가: {int(prev_close * (1 - threshold))}\n"
+                        f"매수 기준 등락율: -{threshold:.2%}\n"
+                        f"현재가: {int(current_price)} (변화율: {diff:.2%})"
+                    )
                     send_telegram_alert(msg)
                     notified[code] = True
 
-                    if all(notified.values()):
-                        print("✅ 모든 종목 감시 완료. 프로그램 종료.")
-                        send_telegram_alert("✅ 모든 감시 종목 알림 완료. 프로그램 종료.")
-                        sys.exit()
+                elif diff > threshold:
+                    msg = (
+                        f"🚨 {code} 타이밍 \n"
+                        f"전일종가: {int(prev_close)}\n"
+                        f"매도 기준가: {int(prev_close * (1 + threshold))}\n"
+                        f"매도 기준 등락율: +{threshold:.2%}\n"
+                        f"현재가: {int(current_price)} (변화율: {diff:.2%})"
+                    )
+                    send_telegram_alert(msg)
+                    notified[code] = True
 
                 else:
                     print(f"[{code}] 변화율 정상 범위")
+
+                if all(notified.values()):
+                    print("✅ 모든 종목 감시 완료. 프로그램 종료.")
+                    send_telegram_alert("✅ 모든 종목 감시 완료. 프로그램 종료.")
+                    sys.exit()
 
             except Exception as e:
                 print(f"[{code}] 오류: {e}")
