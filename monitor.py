@@ -123,7 +123,7 @@ def run_monitor():
 
                 print(f"[{code}] 변화율: {diff:.2%} / 기준: ({mean:.2%} ± 2×{std:.2%})")
 
-                if diff < mean - 2 * std:
+                if diff < mean - 1.5 * std:
                     msg = (
                         f"🚨 {code} 매수 타이밍\n"
                         f"전일종가: {int(prev_close)}\n"
